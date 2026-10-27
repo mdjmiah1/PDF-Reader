@@ -105,6 +105,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Go back to Home without stacking another Home entry on the back stack.
+private fun androidx.navigation.NavController.navigateHome() {
+    navigate(Screen.Home.route) {
+        popUpTo(Screen.Home.route) { inclusive = false }
+        launchSingleTop = true
+    }
+}
+
 @Composable
 fun PdfReaderApp(
     settingsViewModel: SettingsViewModel,
@@ -216,9 +224,7 @@ fun PdfReaderApp(
                     onNavigateToReader = { uri ->
                         navController.navigate(Screen.Reader.createRoute(uri))
                     },
-                    onNavigateBack = {
-                        navController.navigate(Screen.Home.route)
-                    }
+                    onNavigateBack = { navController.navigateHome() }
                 )
             }
 
@@ -226,21 +232,18 @@ fun PdfReaderApp(
                 BookmarksScreen(
                     viewModel = bookmarksViewModel,
                     onNavigateToDocument = { uri, page ->
+                        // Hand the page to the reader before it loads; loadDocument applies it.
+                        readerViewModel.requestStartPage(uri, page)
                         navController.navigate(Screen.Reader.createRoute(uri))
-                        readerViewModel.onPageChanged(page)
                     },
-                    onNavigateBack = {
-                        navController.navigate(Screen.Home.route)
-                    }
+                    onNavigateBack = { navController.navigateHome() }
                 )
             }
 
             composable(Screen.Settings.route) {
                 SettingsScreen(
                     viewModel = settingsViewModel,
-                    onNavigateBack = {
-                        navController.navigate(Screen.Home.route)
-                    }
+                    onNavigateBack = { navController.navigateHome() }
                 )
             }
 
