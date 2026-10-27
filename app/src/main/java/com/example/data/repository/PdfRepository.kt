@@ -83,7 +83,7 @@ class PdfRepository(private val context: Context) {
             }
         } catch (_: Exception) {}
 
-        // Direct folder scan of common storage directories
+        // Direct folder scan of common storage directories 
         try {
             val publicDirs = listOf(
                 android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
