@@ -12,6 +12,10 @@ class PdfSearchEngine {
     // Index of text content by page for sample & loaded documents
     private val pageTextContent = mutableMapOf<Int, String>()
 
+    fun clear() {
+        pageTextContent.clear()
+    }
+
     fun indexSampleDocument(title: String, pageCount: Int) {
         pageTextContent.clear()
         when {

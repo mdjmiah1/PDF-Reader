@@ -197,7 +197,7 @@ private fun sharePdf(context: Context, document: DocumentEntity) {
             androidx.core.content.FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
-                File(document.uriString)
+                com.example.data.resolveLocalFile(document.uriString)
             )
         }
         val intent = Intent(Intent.ACTION_SEND).apply {

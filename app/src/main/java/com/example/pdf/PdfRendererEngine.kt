@@ -58,7 +58,7 @@ class PdfRendererEngine(private val context: Context) {
                             }
                         }
                     } else {
-                        val file = File(uriString)
+                        val file = com.example.data.resolveLocalFile(uriString)
                         if (!file.exists()) {
                             return@withContext Result.failure(IllegalStateException("File not found at $uriString"))
                         }
@@ -111,29 +111,35 @@ class PdfRendererEngine(private val context: Context) {
 
             try {
                 val page = currentRenderer.openPage(pageIndex)
-                val originalWidth = page.width
-                val originalHeight = page.height
+                // The page must always be closed, otherwise every later openPage()
+                // fails with "Current page not closed".
+                val bitmap = try {
+                    val originalWidth = page.width
+                    val originalHeight = page.height
 
-                // Calculate scaled dimensions keeping aspect ratio
-                val scale = minOf(
-                    destWidth.toFloat() / originalWidth,
-                    destHeight.toFloat() / originalHeight
-                ).coerceIn(0.5f, 4.0f)
+                    // Calculate scaled dimensions keeping aspect ratio
+                    val scale = minOf(
+                        destWidth.toFloat() / originalWidth,
+                        destHeight.toFloat() / originalHeight
+                    ).coerceIn(0.5f, 4.0f)
 
-                val bmpWidth = (originalWidth * scale).roundToInt().coerceAtLeast(100)
-                val bmpHeight = (originalHeight * scale).roundToInt().coerceAtLeast(100)
+                    val bmpWidth = (originalWidth * scale).roundToInt().coerceAtLeast(100)
+                    val bmpHeight = (originalHeight * scale).roundToInt().coerceAtLeast(100)
 
-                val bitmap = Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888)
-                // Draw white background
-                val canvas = android.graphics.Canvas(bitmap)
-                canvas.drawColor(Color.WHITE)
+                    val created = Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888)
+                    // Draw white background
+                    val canvas = android.graphics.Canvas(created)
+                    canvas.drawColor(Color.WHITE)
 
-                val transformMatrix = Matrix().apply {
-                    postScale(scale, scale)
+                    val transformMatrix = Matrix().apply {
+                        postScale(scale, scale)
+                    }
+
+                    page.render(created, null, transformMatrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    created
+                } finally {
+                    page.close()
                 }
-
-                page.render(bitmap, null, transformMatrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                page.close()
 
                 val finalBitmap = if (rotationDegrees != 0) {
                     val rotMatrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
@@ -146,6 +152,10 @@ class PdfRendererEngine(private val context: Context) {
 
                 bitmapCache.put(cacheKey, finalBitmap)
                 finalBitmap
+            } catch (e: OutOfMemoryError) {
+                // Free cached pages so the next render has room, instead of crashing.
+                bitmapCache.evictAll()
+                null
             } catch (e: Exception) {
                 null
             }

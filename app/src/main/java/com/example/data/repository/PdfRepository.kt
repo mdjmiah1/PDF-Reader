@@ -111,8 +111,13 @@ class PdfRepository(private val context: Context) {
 
     private suspend fun addFileToDatabase(file: File, title: String, size: Long): Boolean {
         try {
-            val uriString = Uri.fromFile(file).toString()
-            if (documentDao.getDocumentSync(uriString) == null) {
+            // Store the plain absolute path, the same form importDocumentFromUri uses,
+            // so a file is never listed twice and the renderer can open it.
+            val uriString = file.absolutePath
+            val legacyUriString = Uri.fromFile(file).toString()
+            if (documentDao.getDocumentSync(uriString) == null &&
+                documentDao.getDocumentSync(legacyUriString) == null
+            ) {
                 var pageCount = 1
                 runCatching {
                     ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)?.use { pfd ->
@@ -161,7 +166,7 @@ class PdfRepository(private val context: Context) {
 
         // If it was an internal copied file, remove it
         if (!uriString.startsWith("content://")) {
-            val file = File(uriString)
+            val file = com.example.data.resolveLocalFile(uriString)
             if (file.exists() && file.parentFile?.name != "samples") {
                 file.delete()
             }
@@ -323,6 +328,14 @@ class PdfRepository(private val context: Context) {
 
     suspend fun importAllPdfsFromTree(treeUri: Uri): Int = withContext(Dispatchers.IO) {
         var count = 0
+        // Keep access to the chosen folder after the app restarts; without this the
+        // imported document URIs throw SecurityException on the next launch.
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
         try {
             val treeDocumentId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
             val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocumentId)

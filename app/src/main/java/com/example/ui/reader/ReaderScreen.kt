@@ -348,14 +348,17 @@ fun ReaderScreen(
                         },
                         actions = {
                             if (uiState.errorMessage == null && !uiState.isLoading) {
-                                IconButton(
-                                    onClick = { viewModel.toggleSearch() },
-                                    modifier = Modifier.testTag("reader_search_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Search,
-                                        contentDescription = "Search"
-                                    )
+                                // Text search only has an index for the built-in sample PDFs for now.
+                                if (uiState.isSearchAvailable) {
+                                    IconButton(
+                                        onClick = { viewModel.toggleSearch() },
+                                        modifier = Modifier.testTag("reader_search_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = "Search"
+                                        )
+                                    }
                                 }
 
                                 IconButton(
@@ -472,7 +475,7 @@ private fun sharePdfFile(context: Context, document: DocumentEntity) {
             androidx.core.content.FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
-                File(document.uriString)
+                com.example.data.resolveLocalFile(document.uriString)
             )
         }
         val intent = Intent(Intent.ACTION_SEND).apply {

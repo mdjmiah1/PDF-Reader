@@ -18,6 +18,9 @@ import com.example.pdf.SearchMatch
 import com.example.pdf.UiAnnotation
 import com.example.ui.theme.AnnotationIndigo
 import com.example.ui.theme.AnnotationYellow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +42,7 @@ data class ReaderUiState(
     val isCurrentPageBookmarked: Boolean = false,
     val bookmarksForDoc: List<BookmarkEntity> = emptyList(),
     val pageAnnotations: List<UiAnnotation> = emptyList(),
+    val isSearchAvailable: Boolean = false,
     val isSearchOpen: Boolean = false,
     val searchQuery: String = "",
     val searchResults: List<SearchMatch> = emptyList(),
@@ -58,28 +62,63 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState: StateFlow<ReaderUiState> = _uiState.asStateFlow()
 
+    // Collectors are tracked so a page turn or a new document replaces them
+    // instead of piling up new ones.
+    private var annotationsJob: Job? = null
+    private var bookmarksJob: Job? = null
+
+    // Page requested by the caller (e.g. a tapped bookmark) for the next load of a document.
+    private var pendingStart: Pair<String, Int>? = null
+
+    fun requestStartPage(uriString: String, page: Int) {
+        pendingStart = uriString to page
+    }
+
     fun loadDocument(uriString: String) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, uriString = uriString, errorMessage = null) }
+            annotationsJob?.cancel()
+            bookmarksJob?.cancel()
+
+            val isNewDocument = _uiState.value.uriString != uriString
+            _uiState.update {
+                if (isNewDocument) {
+                    // Don't carry zoom, rotation, search or annotations over from another document.
+                    ReaderUiState(uriString = uriString, isLoading = true)
+                } else {
+                    it.copy(isLoading = true, errorMessage = null)
+                }
+            }
 
             val doc = repository.getDocumentSync(uriString)
             val openResult = rendererEngine.open(uriString)
+            val requestedPage = pendingStart?.takeIf { it.first == uriString }?.second
+            pendingStart = null
 
             openResult.onSuccess { count ->
-                val startPage = doc?.lastReadPage?.coerceIn(1, count) ?: 1
-                searchEngine.indexSampleDocument(doc?.title ?: "Document", count)
+                val startPage = (requestedPage ?: doc?.lastReadPage ?: 1)
+                    .coerceIn(1, count.coerceAtLeast(1))
+
+                // Only the generated sample PDFs have an index; real PDFs have no text index yet.
+                val searchAvailable = doc?.isSample == true
+                if (searchAvailable) {
+                    searchEngine.indexSampleDocument(doc?.title ?: "Document", count)
+                } else {
+                    searchEngine.clear()
+                }
 
                 _uiState.update {
                     it.copy(
                         document = doc,
                         pageCount = count,
                         currentPage = startPage,
+                        isSearchAvailable = searchAvailable,
                         isLoading = false
                     )
                 }
 
                 repository.recordDocumentOpened(uriString, startPage)
-                observePageData(uriString, startPage)
+                observeBookmarks(uriString)
+                observePageAnnotations(uriString, startPage)
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
@@ -108,34 +147,46 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun observePageData(uri: String, page: Int) {
-        viewModelScope.launch {
-            val bookmarked = repository.isPageBookmarked(uri, page)
-            _uiState.update { it.copy(isCurrentPageBookmarked = bookmarked) }
+    private fun observeBookmarks(uri: String) {
+        bookmarksJob?.cancel()
+        bookmarksJob = viewModelScope.launch {
+            repository.getBookmarksForDocument(uri).collect { bookmarks ->
+                _uiState.update { state ->
+                    state.copy(
+                        bookmarksForDoc = bookmarks,
+                        isCurrentPageBookmarked = bookmarks.any { it.pageNumber == state.currentPage }
+                    )
+                }
+            }
         }
+    }
 
-        viewModelScope.launch {
+    private fun observePageAnnotations(uri: String, page: Int) {
+        annotationsJob?.cancel()
+        annotationsJob = viewModelScope.launch {
             repository.getAnnotationsForPage(uri, page).collect { entities ->
                 val uiAnnotations = entities.map { AnnotationParser.toUiAnnotation(it) }
                 _uiState.update { it.copy(pageAnnotations = uiAnnotations) }
             }
         }
-
-        viewModelScope.launch {
-            repository.getBookmarksForDocument(uri).collect { bookmarks ->
-                _uiState.update { it.copy(bookmarksForDoc = bookmarks) }
-            }
-        }
     }
 
     fun onPageChanged(page: Int) {
-        val target = page.coerceIn(1, _uiState.value.pageCount.coerceAtLeast(1))
-        if (target != _uiState.value.currentPage) {
-            _uiState.update { it.copy(currentPage = target) }
-            val uri = _uiState.value.uriString
+        val state = _uiState.value
+        val target = page.coerceIn(1, state.pageCount.coerceAtLeast(1))
+        if (target != state.currentPage) {
+            _uiState.update {
+                it.copy(
+                    currentPage = target,
+                    // Clear immediately so the previous page's strokes never show on the new page.
+                    pageAnnotations = emptyList(),
+                    isCurrentPageBookmarked = it.bookmarksForDoc.any { b -> b.pageNumber == target }
+                )
+            }
+            val uri = state.uriString
+            observePageAnnotations(uri, target)
             viewModelScope.launch {
                 repository.updateReadingProgress(uri, target)
-                observePageData(uri, target)
             }
         }
     }
@@ -306,8 +357,10 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
-        viewModelScope.launch {
-            rendererEngine.close()
+        // viewModelScope is already cancelled here, so launching in it would never run.
+        val engine = rendererEngine
+        CoroutineScope(Dispatchers.IO).launch {
+            engine.close()
         }
     }
 }
